@@ -1,6 +1,9 @@
 package jobs
 
-import "log"
+import (
+    "log"
+    "sync"
+)
 
 type (
     Worker struct {
@@ -59,11 +62,12 @@ type Dispatcher struct {
     workerPool chan chan Job
     maxWorkers int
     closeChan  chan struct{}
+    wrapPool   sync.Pool
 }
 
 func NewDispatcher(maxWorkers int, jobQueue chan Job) *Dispatcher {
     if jobQueue == nil {
-        jobQueue = make(chan Job)
+        jobQueue = make(chan Job, maxWorkers)
     }
     pool := make(chan chan Job, maxWorkers)
     return &Dispatcher{
@@ -71,6 +75,11 @@ func NewDispatcher(maxWorkers int, jobQueue chan Job) *Dispatcher {
         maxWorkers: maxWorkers,
         jobQueue:   jobQueue,
         closeChan:  make(chan struct{}),
+        wrapPool: sync.Pool{
+            New: func() interface{} {
+                return &jobWrap{}
+            },
+        },
     }
 }
 
@@ -89,6 +98,9 @@ func (d *Dispatcher) dispatch() {
         case job := <-d.jobQueue:
             go func(job Job) {
                 defer func() {
+                    if _, ok := job.(*jobWrap); ok {
+                        d.wrapPool.Put(job)
+                    }
                     if e := recover(); e != nil {
                         log.Println(e)
                     }
@@ -106,8 +118,17 @@ func (d *Dispatcher) Close() {
     close(d.closeChan)
 }
 
-func (d *Dispatcher) Run(f func()) {
-    d.jobQueue <- &jobWrap{
-        fn: f,
+func (d *Dispatcher) Run(fns ...func()) {
+    if len(fns) == 0 {
+        job := d.wrapPool.Get().(*jobWrap)
+        job.fn = fns[0]
+        d.jobQueue <- job
+    } else {
+        for _, fn := range fns {
+            job := d.wrapPool.Get().(*jobWrap)
+            job.fn = fn
+            d.jobQueue <- job
+        }
     }
+
 }

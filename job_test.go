@@ -1,6 +1,8 @@
 package jobs
 
 import (
+    "fmt"
+    "sync/atomic"
     "testing"
     "time"
 )
@@ -35,5 +37,37 @@ func TestNewDispatcher(t *testing.T) {
     dispatcher.Run(func() {
         t.Log("testing 4")
     })
+    dispatcher.Run(func() {
+        t.Log("testing 5")
+    })
     time.Sleep(time.Second)
+}
+
+func TestQPS(t *testing.T) {
+    var (
+        count     int64
+        last      int64
+        isRunning = true
+    )
+    dispatcher := NewDispatcher(50, nil)
+    dispatcher.Start()
+
+    go func() {
+        n := 0
+        for n < 10 {
+            time.Sleep(time.Second)
+            now := atomic.LoadInt64(&count)
+            fmt.Println(n, " qps:", now-last)
+            last = now
+            n++
+        }
+        isRunning = false
+    }()
+    fn := func() {
+        atomic.AddInt64(&count, 1)
+    }
+    for isRunning {
+        dispatcher.Run(fn)
+    }
+
 }
